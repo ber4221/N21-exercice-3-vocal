@@ -234,7 +234,6 @@ body{touch-action:manipulation}
   let active = null;
   let recognition = null;
   let freshEntry = true;
-  let micStream = null;
   let micReady = false;
 
   const words = {
@@ -245,133 +244,58 @@ body{touch-action:manipulation}
   };
 
 
-  async function activateMicrophoneOnce(){
+  function activateMicrophoneOnce(){
     if(micReady){
-      status.textContent='Le micro est déjà actif pour cette séance.';
-      return true;
+      status.textContent='Le micro est déjà autorisé pour cette séance.';
+      return;
     }
 
-    if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
-      micState.textContent='Cette page doit être ouverte depuis une adresse HTTPS pour garder le micro actif de façon fiable.';
-      status.textContent='Micro indisponible ici. Le pavé numérique reste utilisable.';
-      return false;
+    if(!SpeechRecognition){
+      micState.textContent='La reconnaissance vocale n’est pas disponible dans ce navigateur.';
+      status.textContent='Utilisez le pavé numérique.';
+      return;
     }
 
     try{
-      // Une seule demande d'autorisation pour la séance.
-      micStream = await navigator.mediaDevices.getUserMedia({audio:true});
-      micReady = true;
+      const testRecognition = new SpeechRecognition();
+      testRecognition.lang='fr-FR';
+      testRecognition.interimResults=false;
+      testRecognition.continuous=false;
+      testRecognition.maxAlternatives=1;
 
-      enableMic.textContent='● Micro actif pour la séance';
-      enableMic.classList.add('active');
-      enableMic.disabled = true;
+      micState.textContent='Demande d’autorisation du micro…';
+      status.textContent='Autorisez le microphone si Chrome le demande.';
 
-      micState.textContent='Le micro reste actif tant que cette page reste ouverte.';
-      status.textContent='Micro actif. Touchez une case, puis dites votre réponse.';
+      testRecognition.onstart=function(){
+        micReady=true;
+        enableMic.textContent='✓ Micro autorisé pour la séance';
+        enableMic.classList.add('active');
+        enableMic.disabled=true;
+        micState.textContent='Autorisation obtenue. Touchez maintenant une case.';
+        status.textContent='Micro prêt. Touchez une case pour dicter une réponse.';
+        try{ testRecognition.abort(); }catch(e){}
+      };
 
-      startRecognitionSession();
-      return true;
-    }catch(err){
-      micState.textContent='Autorisation refusée ou indisponible.';
-      status.textContent='Autorisez le microphone pour ce site, ou utilisez le pavé numérique.';
-      return false;
-    }
-  }
-
-  function startRecognitionSession(){
-    if(!micReady || !SpeechRecognition) return;
-
-    if(recognition){
-      try{ recognition.abort(); }catch(e){}
-    }
-
-    recognition = new SpeechRecognition();
-    recognition.lang='fr-FR';
-    recognition.interimResults=false;
-    recognition.continuous=true;
-    recognition.maxAlternatives=5;
-
-    recognition.onstart=function(){
-      if(active){
-        status.classList.add('listening');
-        status.textContent='🎤 J’écoute la case '+active.dataset.zone+'…';
-      }
-    };
-
-    recognition.onresult=function(ev){
-      if(!active) return;
-
-      // Ne traite que le dernier résultat final.
-      const result = ev.results[ev.results.length - 1];
-      if(!result || !result.isFinal) return;
-
-      let parsed=null;
-      let entendu='';
-
-      for(let i=0;i<result.length;i++){
-        entendu=result[i].transcript;
-        parsed=parseSpeech(entendu);
-
-        if(parsed!==null){
-          if(active.dataset.sign !== 'negative' || parsed.explicitMinus){
-            break;
-          }
-        }
-      }
-
-      status.classList.remove('listening');
-
-      if(parsed===null){
-        status.textContent='Je n’ai pas compris le nombre. Réessaie.';
-        return;
-      }
-
-      if(active.dataset.sign === 'negative' && !parsed.explicitMinus){
-        setCurrent(active,'');
-        status.textContent='⚠ N’oublie pas le signe : dis « moins trois », et pas seulement « trois ».';
-        return;
-      }
-
-      const signedValue =
-        active.dataset.sign === 'negative'
-          ? -Math.abs(parsed.value)
-          : Math.abs(parsed.value);
-
-      setCurrent(active,String(signedValue));
-      freshEntry=true;
-      status.textContent='Réponse reconnue : '+signedValue+'. Touchez ✓ pour valider.';
-    };
-
-    recognition.onerror=function(ev){
-      // "no-speech" arrive régulièrement pendant une écoute continue :
-      // ce n'est pas une erreur pour l'élève.
-      if(ev.error==='not-allowed' || ev.error==='service-not-allowed'){
+      testRecognition.onerror=function(ev){
         micReady=false;
         enableMic.disabled=false;
         enableMic.classList.remove('active');
-        enableMic.textContent='🎤 Réactiver le micro';
-        micState.textContent='Le navigateur a retiré l’autorisation du micro.';
-        status.textContent='Réactivez le micro ou utilisez le pavé numérique.';
-      }
-    };
+        enableMic.textContent='🎤 Activer le micro pour la séance';
 
-    recognition.onend=function(){
-      status.classList.remove('listening');
+        if(ev.error==='not-allowed' || ev.error==='service-not-allowed'){
+          micState.textContent='Autorisation du micro refusée.';
+          status.textContent='Autorisez le microphone pour ce site dans Chrome.';
+        }else{
+          micState.textContent='Impossible d’activer le micro : '+ev.error;
+          status.textContent='Réessayez ou utilisez le pavé numérique.';
+        }
+      };
 
-      // Chrome peut arrêter automatiquement la reconnaissance après un silence.
-      // Tant que la séance est active, on la relance sans redemander l'autorisation.
-      if(micReady){
-        setTimeout(function(){
-          try{
-            recognition.start();
-          }catch(e){}
-        }, 250);
-      }
-    };
-
-    try{
-      recognition.start();
-    }catch(e){}
+      testRecognition.start();
+    }catch(err){
+      micState.textContent='Impossible de démarrer la reconnaissance vocale.';
+      status.textContent='Réessayez ou utilisez le pavé numérique.';
+    }
   }
 
   enableMic.addEventListener('click', activateMicrophoneOnce);
@@ -469,7 +393,7 @@ body{touch-action:manipulation}
     active=null;
   }
 
-  async function startListening(z){
+  function startListening(z){
     activate(z);
 
     if(!micReady){
@@ -478,16 +402,100 @@ body{touch-action:manipulation}
     }
 
     if(!SpeechRecognition){
-      status.textContent='La reconnaissance vocale n’est pas disponible dans ce navigateur. Utilise le pavé numérique.';
+      status.textContent='La reconnaissance vocale n’est pas disponible. Utilisez le pavé numérique.';
       keypad.classList.add('show');
       return;
     }
 
-    status.classList.add('listening');
-    status.textContent=
-      z.dataset.sign === 'negative'
-        ? '🎤 J’écoute… dis par exemple « moins trois ».'
-        : '🎤 J’écoute… dis par exemple « cinq ».';
+    if(recognition){
+      try{ recognition.abort(); }catch(e){}
+    }
+
+    recognition = new SpeechRecognition();
+    recognition.lang='fr-FR';
+    recognition.interimResults=false;
+    recognition.continuous=false;
+    recognition.maxAlternatives=5;
+
+    recognition.onaudiostart=function(){
+      status.classList.add('listening');
+      status.textContent=
+        z.dataset.sign === 'negative'
+          ? '🎤 Micro actif… dites « moins trois » par exemple.'
+          : '🎤 Micro actif… dites « cinq » par exemple.';
+    };
+
+    recognition.onspeechstart=function(){
+      status.classList.add('listening');
+      status.textContent='🎤 Voix détectée…';
+    };
+
+    recognition.onresult=function(ev){
+      const result=ev.results[0];
+      let parsed=null;
+      let entendu='';
+
+      for(let i=0;i<result.length;i++){
+        entendu=result[i].transcript;
+        parsed=parseSpeech(entendu);
+
+        if(parsed!==null){
+          if(z.dataset.sign !== 'negative' || parsed.explicitMinus){
+            break;
+          }
+        }
+      }
+
+      status.classList.remove('listening');
+
+      if(parsed===null){
+        status.textContent='Je n’ai pas compris le nombre. Réessayez.';
+        return;
+      }
+
+      if(z.dataset.sign === 'negative' && !parsed.explicitMinus){
+        setCurrent(z,'');
+        status.textContent='⚠ N’oublie pas le signe : dis « moins trois », et pas seulement « trois ».';
+        return;
+      }
+
+      const signedValue =
+        z.dataset.sign === 'negative'
+          ? -Math.abs(parsed.value)
+          : Math.abs(parsed.value);
+
+      setCurrent(z,String(signedValue));
+      freshEntry=true;
+      status.textContent='Entendu : « '+entendu+' » → '+signedValue+'. Touchez ✓ pour valider.';
+    };
+
+    recognition.onerror=function(ev){
+      status.classList.remove('listening');
+
+      if(ev.error==='no-speech'){
+        status.textContent='Je n’ai pas entendu de voix. Touchez de nouveau le micro et réessayez.';
+      }else if(ev.error==='not-allowed' || ev.error==='service-not-allowed'){
+        micReady=false;
+        enableMic.disabled=false;
+        enableMic.classList.remove('active');
+        enableMic.textContent='🎤 Réactiver le micro';
+        micState.textContent='Chrome a bloqué le microphone.';
+        status.textContent='Réautorisez le microphone pour ce site.';
+      }else{
+        status.textContent='Erreur micro : '+ev.error+'. Réessayez.';
+      }
+    };
+
+    recognition.onend=function(){
+      status.classList.remove('listening');
+    };
+
+    try{
+      recognition.start();
+    }catch(err){
+      status.classList.remove('listening');
+      status.textContent='Impossible de démarrer l’écoute. Réessayez.';
+    }
   }
 
   zones.forEach(z=>{
