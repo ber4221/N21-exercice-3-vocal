@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>Diagnostic micro tablette</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;padding:16px;font-family:Arial,sans-serif;background:#eef2f5;color:#1f2937}
+.card{max-width:720px;margin:auto;background:#fff;border-radius:16px;padding:18px;box-shadow:0 3px 14px rgba(0,0,0,.12)}
+h1{font-size:22px;margin:0 0 8px}
+p{line-height:1.4}
+button{width:100%;min-height:52px;margin:8px 0;border:0;border-radius:12px;font-size:17px;font-weight:800;background:#2f7df4;color:#fff}
+button.secondary{background:#425466}
+button:disabled{opacity:.45}
+.status{padding:10px 12px;border-radius:10px;margin:8px 0;background:#f4f6f8;font-weight:700}
+.ok{background:#e8f7ed;color:#24763e}
+.bad{background:#fdecec;color:#a22929}
+.meter{height:32px;background:#edf0f3;border-radius:999px;overflow:hidden;border:1px solid #ccd3da;margin:10px 0}
+.bar{height:100%;width:0%;background:#2e9f54;transition:width .06s linear}
+.small{font-size:13px;color:#667381}
+#log{margin-top:10px;padding:10px;background:#f7f9fb;border-radius:10px;min-height:120px;white-space:pre-wrap;font-family:Consolas,monospace;font-size:12px}
+audio{width:100%;margin-top:8px}
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>Diagnostic micro + dictée</h1>
+  <p>Ce test sépare le <b>microphone</b> de la <b>reconnaissance vocale</b>.</p>
+
+  <button id="micBtn" type="button">1. Autoriser et tester le micro</button>
+  <div id="micStatus" class="status">Micro : pas encore testé</div>
+
+  <div class="small">Niveau sonore reçu :</div>
+  <div class="meter"><div id="bar" class="bar"></div></div>
+  <div id="levelText" class="small">Parlez : la barre doit bouger.</div>
+
+  <button id="recordBtn" class="secondary" type="button" disabled>2. Enregistrer 3 secondes et réécouter</button>
+  <audio id="playback" controls style="display:none"></audio>
+
+  <button id="speechBtn" type="button" disabled>3. Tester la dictée</button>
+  <div id="speechStatus" class="status">Dictée : pas encore testée</div>
+
+  <div id="log">Journal des événements :</div>
+</div>
+
+<script>
+(function(){
+  const micBtn=document.getElementById('micBtn');
+  const recordBtn=document.getElementById('recordBtn');
+  const speechBtn=document.getElementById('speechBtn');
+  const micStatus=document.getElementById('micStatus');
+  const speechStatus=document.getElementById('speechStatus');
+  const bar=document.getElementById('bar');
+  const levelText=document.getElementById('levelText');
+  const playback=document.getElementById('playback');
+  const log=document.getElementById('log');
+
+  const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
+  let stream=null;
+  let ctx=null;
+  let analyser=null;
+  let raf=0;
+
+  function addLog(txt){
+    log.textContent += '\n'+txt;
+  }
+
+  function setStatus(el,ok,txt){
+    el.className='status '+(ok?'ok':'bad');
+    el.textContent=txt;
+  }
+
+  async function startMic(){
+    try{
+      stream=await navigator.mediaDevices.getUserMedia({audio:true});
+      setStatus(micStatus,true,'Micro : accès accordé');
+      recordBtn.disabled=false;
+      speechBtn.disabled=!SR;
+      micBtn.textContent='✓ Micro autorisé';
+
+      ctx=new (window.AudioContext||window.webkitAudioContext)();
+      const src=ctx.createMediaStreamSource(stream);
+      analyser=ctx.createAnalyser();
+      analyser.fftSize=512;
+      src.connect(analyser);
+
+      const data=new Uint8Array(analyser.frequencyBinCount);
+
+      function draw(){
+        analyser.getByteTimeDomainData(data);
+        let sum=0;
+        for(let i=0;i<data.length;i++){
+          const v=(data[i]-128)/128;
+          sum+=v*v;
+        }
+        const rms=Math.sqrt(sum/data.length);
+        const pct=Math.min(100,Math.max(0,rms*450));
+        bar.style.width=pct.toFixed(1)+'%';
+
+        if(pct>6){
+          levelText.textContent='✓ Son détecté par le microphone.';
+        }else{
+          levelText.textContent='Parlez : la barre doit bouger.';
+        }
+        raf=requestAnimationFrame(draw);
+      }
+      draw();
+      addLog('getUserMedia : OK');
+      if(!SR) addLog('SpeechRecognition : NON DISPONIBLE');
+      else addLog('SpeechRecognition : disponible');
+    }catch(err){
+      setStatus(micStatus,false,'Micro : '+(err.name||'erreur')+' — '+(err.message||err));
+      addLog('getUserMedia ERREUR : '+(err.name||'')+' '+(err.message||err));
+    }
+  }
+
+  micBtn.addEventListener('click',startMic);
+
+  recordBtn.addEventListener('click',function(){
+    if(!stream || !window.MediaRecorder){
+      addLog('MediaRecorder indisponible');
+      return;
+    }
+    const chunks=[];
+    let rec;
+    try{
+      rec=new MediaRecorder(stream);
+    }catch(err){
+      addLog('MediaRecorder erreur : '+err);
+      return;
+    }
+
+    rec.ondataavailable=e=>{if(e.data&&e.data.size)chunks.push(e.data)};
+    rec.onstop=()=>{
+      const blob=new Blob(chunks,{type:rec.mimeType||'audio/webm'});
+      playback.src=URL.createObjectURL(blob);
+      playback.style.display='block';
+      addLog('Enregistrement terminé. Appuyez sur lecture.');
+    };
+
+    rec.start();
+    recordBtn.disabled=true;
+    recordBtn.textContent='Enregistrement… parlez maintenant';
+    addLog('Enregistrement 3 secondes démarré');
+
+    setTimeout(()=>{
+      rec.stop();
+      recordBtn.disabled=false;
+      recordBtn.textContent='2. Enregistrer 3 secondes et réécouter';
+    },3000);
+  });
+
+  speechBtn.addEventListener('click',function(){
+    if(!SR){
+      setStatus(speechStatus,false,'Dictée : SpeechRecognition indisponible');
+      return;
+    }
+
+    const r=new SR();
+    r.lang='fr-FR';
+    r.interimResults=false;
+    r.continuous=false;
+    r.maxAlternatives=5;
+
+    speechStatus.className='status';
+    speechStatus.textContent='Dictée : démarrage…';
+    addLog('--- TEST DICTÉE ---');
+
+    r.onstart=()=>{addLog('start'); speechStatus.textContent='Dictée : service démarré'};
+    r.onaudiostart=()=>{addLog('audiostart'); speechStatus.textContent='Dictée : audio capturé'};
+    r.onsoundstart=()=>{addLog('soundstart'); speechStatus.textContent='Dictée : son détecté'};
+    r.onspeechstart=()=>{addLog('speechstart'); speechStatus.textContent='Dictée : voix détectée'};
+    r.onspeechend=()=>addLog('speechend');
+    r.onsoundend=()=>addLog('soundend');
+    r.onaudioend=()=>addLog('audioend');
+    r.onnomatch=()=>{addLog('nomatch'); setStatus(speechStatus,false,'Dictée : aucune correspondance')};
+
+    r.onresult=(e)=>{
+      const txt=e.results[0][0].transcript;
+      const conf=e.results[0][0].confidence;
+      addLog('RESULTAT : '+txt+' (confiance '+conf+')');
+      setStatus(speechStatus,true,'Dictée reconnue : « '+txt+' »');
+    };
+
+    r.onerror=(e)=>{
+      addLog('ERREUR : '+e.error+(e.message?' — '+e.message:''));
+      setStatus(speechStatus,false,'Dictée : erreur '+e.error);
+    };
+
+    r.onend=()=>addLog('end');
+
+    try{
+      r.start();
+      setTimeout(()=>{
+        try{r.stop()}catch(e){}
+      },8000);
+    }catch(err){
+      addLog('start() exception : '+err);
+      setStatus(speechStatus,false,'Dictée : impossible de démarrer');
+    }
+  });
+})();
+</script>
+</body>
+</html>
